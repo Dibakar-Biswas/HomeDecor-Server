@@ -5,7 +5,16 @@ require("dotenv").config();
 const stripe = require("stripe")(process.env.STRIPE_SECRET);
 
 const port = process.env.port || 3000;
+const crypto = require("crypto");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+
+function generateTrackingId() {
+    const prefix = "PRCL"; // your brand prefix
+    const date = new Date().toISOString().slice(0, 10).replace(/-/g, ""); // YYYYMMDD
+    const random = crypto.randomBytes(3).toString("hex").toUpperCase(); // 6-char random hex
+
+    return `${prefix}-${date}-${random}`;
+}
 
 // middleware
 app.use(express.json());
@@ -28,6 +37,7 @@ async function run() {
 
     const db = client.db("home_decor_db");
     const decorationsCollection = db.collection("decorations");
+    const paymentsCollection = db.collection('payments');
 
     // decoration api
 
@@ -126,6 +136,7 @@ async function run() {
         mode: "payment",
         metadata: {
           decorationId: paymentInfo.decorationId,
+          decorationName: paymentInfo.serviceName
         },
         success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success`,
         cancel_url: `${process.env.SITE_DOMAIN}/dashboard/payment-cancelled`,
@@ -133,6 +144,54 @@ async function run() {
       console.log(session);
       res.send({ url: session.url });
     });
+
+
+    app.patch('/payment-success', async(req, res) => {
+      const sessionId = req.query.session_id;
+      
+      const session = await stripe.checkout.sessions.retrieve(sessionId)
+
+      console.log('session retrieve', session);
+      const trackingId = generateTrackingId()
+
+      if(session.payment_status === 'paid'){
+        const id = session.metadata.decorationId;
+        const query = {_id: new ObjectId(id)};
+        const update = {
+          $set: {
+            paymentStatus: 'paid',
+            trackingId: trackingId
+          }
+        }
+
+        const result = await decorationsCollection.updateOne(query, update)
+
+
+        const payment = {
+          amount: session.amount_total/100,
+          currency: session.currency,
+          customerEmail: session.customer_details.email,
+          decorationId: session.metadata.decorationId,
+          decorationName: session.metadata.decorationName,
+          transactionId: session.payment_intent,
+          paymentStatus: session.payment_status,
+          paidAt: new Date()
+        }
+
+        if(session.payment_status === 'paid'){
+          const resultPayment = await paymentsCollection.insertOne(payment)
+          res.send({
+            success: true, 
+            trackingId: trackingId, 
+            transactionId: session.payment_intent,
+            modifyDecoration: result, 
+            paymentInfo: resultPayment
+          })
+        }
+      }
+
+      res.send({success: false})
+    })
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
