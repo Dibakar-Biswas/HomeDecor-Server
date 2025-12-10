@@ -26,20 +26,28 @@ async function run() {
     await client.connect();
 
     const db = client.db('home_decor_db');
-    const decorationsCollection = db.collections('decorations');
+    const decorationsCollection = db.collection('decorations');
 
     // decoration api
 
     app.get('/decorations', async(req, res) => {
-        
-    })
+        const query = {}
 
-    app.post('/decorations', async(req, res) => {
-        const decoration = req.body;
-        const result = await decorationsCollection.insertOne(decoration);
+        const {email} = req.query;
+        if(email){
+          query.adminEmail = email;
+        }
+
+        const cursor = decorationsCollection.find(query);
+        const result = await cursor.toArray();
         res.send(result)
     })
 
+    app.post('/decorations', async(req, res) => {
+      const decoration = req.body;
+      const result = await decorationsCollection.insertOne(decoration);
+      res.send(result)
+    })
 
     
     // Send a ping to confirm a successful connection
