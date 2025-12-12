@@ -16,6 +16,7 @@ admin.initializeApp({
 });
 
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+const { access } = require("fs");
 
 function generateTrackingId() {
   const prefix = "PRCL"; // your brand prefix
@@ -69,10 +70,25 @@ async function run() {
     const paymentsCollection = db.collection("payments");
     const decoratorsCollection = db.collection("decorators");
 
+    // middleware verify admin before allowing admin activity
+    // must be used after verifyFBToken middleware
+
+    const verifyAdmin = async(req, res, next) => {
+      const email = req.decoded_email;
+      const query = {email}
+      const user = await usersCollection.findOne(query)
+
+      if(!user || user.role !== 'admin'){
+        return res.status(403).send({message: 'forbidden access'})
+      }
+
+      next();
+    }
+
     // user related api
 
     app.get('/users', verifyFBToken, async(req, res) => {
-      const cursor = usersCollection.find();
+      const cursor = usersCollection.find().sort({createdAt: -1});
       const result = await cursor.toArray();
       res.send(result)
     })
@@ -103,7 +119,7 @@ async function run() {
       res.send(result);
     });
 
-    app.patch('/users/:id', async(req, res) => {
+    app.patch('/users/:id/role', verifyFBToken, verifyAdmin, async(req, res) => {
       const id = req.params.id;
       const roleInfo = req.body;
       const query = { _id: new ObjectId(id)}
@@ -117,15 +133,17 @@ async function run() {
     })
 
     // decoration api
-
     app.get("/decorations", async (req, res) => {
       const query = {};
 
-      const { email } = req.query;
+      const { email, decorationStatus } = req.query;
       if (email) {
         query.adminEmail = email;
       }
 
+      if(decorationStatus){
+        query.decorationStatus = decorationStatus
+      }
       const options = { sort: { createdAt: -1 } };
 
       const cursor = decorationsCollection.find(query, options);
@@ -158,6 +176,7 @@ async function run() {
       res.send(result);
     });
 
+
     // payment related apis
     app.post("/payment-checkout-session", async (req, res) => {
       const paymentInfo = req.body;
@@ -178,7 +197,7 @@ async function run() {
           },
         ],
         mode: "payment",
-        customer_email: paymentInfo.adminEmail,
+        customer_email: paymentInfo.customerEmail,
         metadata: {
           decorationId: paymentInfo.decorationId,
         },
@@ -190,48 +209,44 @@ async function run() {
     });
 
     // old
-    app.post("/create-checkout-session", async (req, res) => {
-      const paymentInfo = req.body;
-      const amount = parseInt(paymentInfo.cost) * 100;
+    // app.post("/create-checkout-session", async (req, res) => {
+    //   const paymentInfo = req.body;
+    //   const amount = parseInt(paymentInfo.cost) * 100;
 
-      const session = await stripe.checkout.sessions.create({
-        line_items: [
-          {
-            // Provide the exact Price ID (for example, price_1234) of the product you want to sell
-            price_data: {
-              currency: "BDT",
-              unit_amount: amount,
-              product_data: {
-                name: paymentInfo.serviceName,
-              },
-            },
+    //   const session = await stripe.checkout.sessions.create({
+    //     line_items: [
+    //       {
+    //         // Provide the exact Price ID (for example, price_1234) of the product you want to sell
+    //         price_data: {
+    //           currency: "BDT",
+    //           unit_amount: amount,
+    //           product_data: {
+    //             name: paymentInfo.serviceName,
+    //           },
+    //         },
 
-            quantity: 1,
-          },
-        ],
-        customer_email: paymentInfo.adminEmail,
-        mode: "payment",
-        metadata: {
-          decorationId: paymentInfo.decorationId,
-          decorationName: paymentInfo.serviceName,
-        },
-        success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success`,
-        cancel_url: `${process.env.SITE_DOMAIN}/dashboard/payment-cancelled`,
-      });
-      console.log(session);
-      res.send({ url: session.url });
-    });
+    //         quantity: 1,
+    //       },
+    //     ],
+    //     customer_email: paymentInfo.adminEmail,
+    //     mode: "payment",
+    //     metadata: {
+    //       decorationId: paymentInfo.decorationId,
+    //       decorationName: paymentInfo.serviceName,
+    //     },
+    //     success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success`,
+    //     cancel_url: `${process.env.SITE_DOMAIN}/dashboard/payment-cancelled`,
+    //   });
+    //   console.log(session);
+    //   res.send({ url: session.url });
+    // });
 
     app.patch("/payment-success", async (req, res) => {
       try {
         const sessionId = req.query.session_id;
         const session = await stripe.checkout.sessions.retrieve(sessionId);
 
-        // 1. Get the Stripe Transaction ID
         const transactionId = session.payment_intent;
-
-        // 2. CHECK DUPLICATION: Use transactionId (Stripe's ID) to check if payment exists
-        // (Checking trackingId here is wrong because it's a new random string)
         const query = { transactionId: transactionId };
         const paymentExist = await paymentsCollection.findOne(query);
         console.log(paymentExist);
@@ -243,17 +258,16 @@ async function run() {
           });
         }
 
-        // 3. Generate the custom Tracking ID only if it's a new payment
         const trackingId = generateTrackingId();
 
         if (session.payment_status === "paid") {
           const id = session.metadata.decorationId;
           const queryDecoration = { _id: new ObjectId(id) };
 
-          // Update decoration status
           const update = {
             $set: {
               paymentStatus: "paid",
+              decorationStatus: 'assigned-decorator',
               trackingId: trackingId,
             },
           };
@@ -262,7 +276,6 @@ async function run() {
             update
           );
 
-          // Create Payment Record
           const payment = {
             amount: session.amount_total / 100,
             currency: session.currency,
@@ -333,7 +346,7 @@ async function run() {
       res.send(result);
     });
 
-    app.patch("/decorators/:id", verifyFBToken, async (req, res) => {
+    app.patch("/decorators/:id", verifyFBToken, verifyAdmin, async (req, res) => {
       const {status, email} = req.body;
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
