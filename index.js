@@ -73,36 +73,34 @@ async function run() {
     // middleware verify admin before allowing admin activity
     // must be used after verifyFBToken middleware
 
-    const verifyAdmin = async(req, res, next) => {
+    const verifyAdmin = async (req, res, next) => {
       const email = req.decoded_email;
-      const query = {email}
-      const user = await usersCollection.findOne(query)
+      const query = { email };
+      const user = await usersCollection.findOne(query);
 
-      if(!user || user.role !== 'admin'){
-        return res.status(403).send({message: 'forbidden access'})
+      if (!user || user.role !== "admin") {
+        return res.status(403).send({ message: "forbidden access" });
       }
 
       next();
-    }
+    };
 
     // user related api
 
-    app.get('/users', verifyFBToken, async(req, res) => {
-      const cursor = usersCollection.find().sort({createdAt: -1});
+    app.get("/users", verifyFBToken, async (req, res) => {
+      const cursor = usersCollection.find().sort({ createdAt: -1 });
       const result = await cursor.toArray();
-      res.send(result)
-    })
+      res.send(result);
+    });
 
-    app.get('/users/:id', async(req, res) => {
+    app.get("/users/:id", async (req, res) => {});
 
-    })
-
-    app.get('/users/:email/role', async(req, res) => {
+    app.get("/users/:email/role", async (req, res) => {
       const email = req.params.email;
-      const query = {email}
+      const query = { email };
       const user = await usersCollection.findOne(query);
-      res.send({role: user?.role || 'user'})
-    })
+      res.send({ role: user?.role || "user" });
+    });
 
     app.post("/users", async (req, res) => {
       const user = req.body;
@@ -119,18 +117,23 @@ async function run() {
       res.send(result);
     });
 
-    app.patch('/users/:id/role', verifyFBToken, verifyAdmin, async(req, res) => {
-      const id = req.params.id;
-      const roleInfo = req.body;
-      const query = { _id: new ObjectId(id)}
-      const updatedDoc = {
-        $set: {
-          role: roleInfo.role
-        }
+    app.patch(
+      "/users/:id/role",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        const id = req.params.id;
+        const roleInfo = req.body;
+        const query = { _id: new ObjectId(id) };
+        const updatedDoc = {
+          $set: {
+            role: roleInfo.role,
+          },
+        };
+        const result = await usersCollection.updateOne(query, updatedDoc);
+        res.send(result);
       }
-      const result = await usersCollection.updateOne(query, updatedDoc);
-      res.send(result);
-    })
+    );
 
     // decoration api
     app.get("/decorations", async (req, res) => {
@@ -141,8 +144,8 @@ async function run() {
         query.adminEmail = email;
       }
 
-      if(decorationStatus){
-        query.decorationStatus = decorationStatus
+      if (decorationStatus) {
+        query.decorationStatus = decorationStatus;
       }
       const options = { sort: { createdAt: -1 } };
 
@@ -168,6 +171,36 @@ async function run() {
       res.send(result);
     });
 
+    app.patch("/decorations/:id", async (req, res) => {
+      const { decoratorId, decoratorName, decoratorEmail } = req.body;
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+
+      const updatedDoc = {
+        $set: {
+          decorationStatus: "materials_prepared",
+          decoratorId: decoratorId,
+          decoratorName: decoratorName,
+          decoratorEmail: decoratorEmail,
+        },
+      };
+      const result = await decorationsCollection.updateOne(query, updatedDoc);
+
+      // update decorator information
+      const decoratorQuery = { _id: new ObjectId(decoratorId) };
+      const decoratorUpdatedDoc = {
+        $set: {
+          workStatus: "in_delivery",
+        },
+      };
+      const decoratorResult = await decoratorsCollection.updateOne(
+        decoratorQuery,
+        decoratorUpdatedDoc
+      );
+
+      res.send(decoratorResult);
+    });
+
     app.delete("/decorations/:id", async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
@@ -175,7 +208,6 @@ async function run() {
       const result = await decorationsCollection.deleteOne(query);
       res.send(result);
     });
-
 
     // payment related apis
     app.post("/payment-checkout-session", async (req, res) => {
@@ -267,7 +299,7 @@ async function run() {
           const update = {
             $set: {
               paymentStatus: "paid",
-              decorationStatus: 'assigned-decorator',
+              decorationStatus: "assigned-decorator",
               trackingId: trackingId,
             },
           };
@@ -328,10 +360,17 @@ async function run() {
 
     // decorator related apis
     app.get("/decorators", async (req, res) => {
+      const { status, workStatus } = req.query;
       const query = {};
-      if (req.query.status) {
-        query.status = req.query.status;
+
+      if (status) {
+        query.status = status;
       }
+
+      if (workStatus) {
+        query.workStatus = workStatus;
+      }
+
       const cursor = decoratorsCollection.find(query);
       const result = await cursor.toArray();
       res.send(result);
@@ -346,32 +385,40 @@ async function run() {
       res.send(result);
     });
 
-    app.patch("/decorators/:id", verifyFBToken, verifyAdmin, async (req, res) => {
-      const {status, email} = req.body;
-      const id = req.params.id;
-      const query = { _id: new ObjectId(id) };
-      const updatedDoc = {
-        $set: {
-          status: status ,
-        },
-      };
-
-      const result = await decoratorsCollection.updateOne(query, updatedDoc);
-
-      if(status === 'approved' && email){
-        const email = req.body.email;
-        const userQuery = {email: email};
-        const updateUser = {
+    app.patch(
+      "/decorators/:id",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        const { status, email } = req.body;
+        const id = req.params.id;
+        const query = { _id: new ObjectId(id) };
+        const updatedDoc = {
           $set: {
-            role: 'decorator'
-          }
+            status: status,
+            workStatus: "available",
+          },
+        };
+
+        const result = await decoratorsCollection.updateOne(query, updatedDoc);
+
+        if (status === "approved" && email) {
+          const email = req.body.email;
+          const userQuery = { email: email };
+          const updateUser = {
+            $set: {
+              role: "decorator",
+            },
+          };
+          const userResult = await usersCollection.updateOne(
+            userQuery,
+            updateUser
+          );
         }
-        const userResult = await usersCollection.updateOne(userQuery, updateUser)
+
+        res.send(result);
       }
-
-
-      res.send(result);
-    });
+    );
 
     app.delete("/decorators/:id", verifyFBToken, async (req, res) => {
       const id = req.params.id;
