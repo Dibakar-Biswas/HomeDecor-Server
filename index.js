@@ -154,6 +154,24 @@ async function run() {
       res.send(result);
     });
 
+    app.get('/decorations/decorator', async(req, res) => {
+      const {decoratorEmail, workStatus} = req.query;
+      const query = {};
+      if(decoratorEmail){
+        query.decoratorEmail = decoratorEmail
+      }
+
+      if(workStatus){
+        // query.workStatus = workStatus;workStatus
+        // query.decorationStatus = {$in: ["materials_prepared", "on_the_way_to_venue"]};
+        query.decorationStatus = {$nin: ['setup_completed']};
+      }
+
+      const cursor = decorationsCollection.find(query)
+      const result = await cursor.toArray()
+      res.send(result)
+    })
+
     app.get("/decorations/:id", async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
@@ -200,6 +218,19 @@ async function run() {
 
       res.send(decoratorResult);
     });
+
+    app.patch('/decorations/:id/status', async(req, res) => {
+      const {decorationStatus} = req.body;
+      const query = {_id: new ObjectId(req.params.id)}
+      const updatedDoc = {
+        $set: {
+          decorationStatus: decorationStatus
+        }
+      }
+
+      const result = await decorationsCollection.updateOne(query, updatedDoc);
+      res.send(result)
+    })
 
     app.delete("/decorations/:id", async (req, res) => {
       const id = req.params.id;
@@ -403,8 +434,9 @@ async function run() {
         const result = await decoratorsCollection.updateOne(query, updatedDoc);
 
         if (status === "approved" && email) {
-          const email = req.body.email;
-          const userQuery = { email: email };
+          // const email = req.body.email;
+          // const userQuery = { email: email };
+          const userQuery = { email: { $regex: new RegExp(`^${email}$`, 'i') } };
           const updateUser = {
             $set: {
               role: "decorator",
@@ -414,6 +446,7 @@ async function run() {
             userQuery,
             updateUser
           );
+          console.log(`Updated user role for ${email}:`, userResult);
         }
 
         res.send(result);
