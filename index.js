@@ -154,23 +154,42 @@ async function run() {
       res.send(result);
     });
 
-    app.get('/decorations/decorator', async(req, res) => {
-      const {decoratorEmail, workStatus} = req.query;
+    app.get("/decorations/decorator", async (req, res) => {
+      const { decoratorEmail, workStatus } = req.query;
       const query = {};
-      if(decoratorEmail){
-        query.decoratorEmail = decoratorEmail
+      if (decoratorEmail) {
+        query.decoratorEmail = decoratorEmail;
       }
 
-      if(workStatus){
-        // query.workStatus = workStatus;workStatus
-        // query.decorationStatus = {$in: ["materials_prepared", "on_the_way_to_venue"]};
-        query.decorationStatus = {$nin: ['setup_completed']};
+      // if (workStatus !== "setup_completed") {
+      //   // query.workStatus = workStatus;workStatus
+      //   // query.decorationStatus = {$in: ["materials_prepared", "on_the_way_to_venue"]};
+      //   query.decorationStatus = { $nin: ["setup_completed"] };
+      // }
+      // else{
+      //   // query.decorationStatus = decorationStatus;
+      //   query.decorationStatus = workStatus;
+      // }
+
+      if (workStatus) {
+        if (workStatus === "setup_completed") {
+          // Case 1: Specifically asking for completed items (Earning page)
+          query.decorationStatus = "setup_completed";
+        } else if (workStatus === "materials_prepared") {
+          // Case 2: specifically asking for pending (Assigned Projects page)
+          // You might want to include "on_the_way" here too if needed
+          // query.decorationStatus = {$in: ["materials_prepared", "on_the_way_to_venue"]};
+          query.decorationStatus = { $nin: ["setup_completed"] }; // Your existing logic for "active" tasks
+        } else {
+          // Generic case
+          query.decorationStatus = workStatus;
+        }
       }
 
-      const cursor = decorationsCollection.find(query)
-      const result = await cursor.toArray()
-      res.send(result)
-    })
+      const cursor = decorationsCollection.find(query);
+      const result = await cursor.toArray();
+      res.send(result);
+    });
 
     app.get("/decorations/:id", async (req, res) => {
       const id = req.params.id;
@@ -219,18 +238,32 @@ async function run() {
       res.send(decoratorResult);
     });
 
-    app.patch('/decorations/:id/status', async(req, res) => {
-      const {decorationStatus} = req.body;
-      const query = {_id: new ObjectId(req.params.id)}
+    app.patch("/decorations/:id/status", async (req, res) => {
+      const { decorationStatus, decoratorId } = req.body;
+      const query = { _id: new ObjectId(req.params.id) };
       const updatedDoc = {
         $set: {
-          decorationStatus: decorationStatus
-        }
+          decorationStatus: decorationStatus,
+        },
+      };
+
+      if (decorationStatus === "setup_completed") {
+        // update decorator information
+        const decoratorQuery = { _id: new ObjectId(decoratorId) };
+        const decoratorUpdatedDoc = {
+          $set: {
+            workStatus: "available",
+          },
+        };
+        const decoratorResult = await decoratorsCollection.updateOne(
+          decoratorQuery,
+          decoratorUpdatedDoc
+        );
       }
 
       const result = await decorationsCollection.updateOne(query, updatedDoc);
-      res.send(result)
-    })
+      res.send(result);
+    });
 
     app.delete("/decorations/:id", async (req, res) => {
       const id = req.params.id;
@@ -436,7 +469,9 @@ async function run() {
         if (status === "approved" && email) {
           // const email = req.body.email;
           // const userQuery = { email: email };
-          const userQuery = { email: { $regex: new RegExp(`^${email}$`, 'i') } };
+          const userQuery = {
+            email: { $regex: new RegExp(`^${email}$`, "i") },
+          };
           const updateUser = {
             $set: {
               role: "decorator",
