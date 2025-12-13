@@ -65,10 +65,12 @@ async function run() {
 
     const db = client.db("home_decor_db");
     const usersCollection = db.collection("users");
-    // const usersCollection = client.db("home_decor_db").collection("users");
     const decorationsCollection = db.collection("decorations");
     const paymentsCollection = db.collection("payments");
     const decoratorsCollection = db.collection("decorators");
+    // const trackingsCollection = db.collection("trackings");
+
+    
 
     // middleware verify admin before allowing admin activity
     // must be used after verifyFBToken middleware
@@ -84,6 +86,72 @@ async function run() {
 
       next();
     };
+
+    const verifyDecorator = async (req, res, next) => {
+      const email = req.decoded_email;
+      const query = { email };
+      const user = await usersCollection.findOne(query);
+
+      if (!user || user.role !== "decorator") {
+        return res.status(403).send({ message: "forbidden access" });
+      }
+
+      next();
+    };
+
+    app.get("/analytics", verifyFBToken, verifyAdmin, async (req, res) => {
+      try {
+        const serviceStats = await decorationsCollection
+          .aggregate([
+            {
+              $group: {
+                _id: "$serviceName", 
+                count: { $sum: 1 }, 
+                totalRevenue: { $sum: { $toInt: "$cost" } }, 
+              },
+            },
+            {
+              $project: {
+                _id: 0,
+                name: "$_id",
+                bookings: "$count",
+                revenue: "$totalRevenue",
+              },
+            },
+          ])
+          .toArray();
+
+       
+        const totalRevenue = serviceStats.reduce(
+          (sum, item) => sum + item.revenue,
+          0
+        );
+        const totalBookings = serviceStats.reduce(
+          (sum, item) => sum + item.bookings,
+          0
+        );
+
+        res.send({
+          serviceStats,
+          totalRevenue,
+          totalBookings,
+        });
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Error fetching analytics" });
+      }
+    });
+
+    // const logTracking = async(trackingId, status) => {
+    //   const log = {
+    //     trackingId,
+    //     status,
+    //     details: status,
+    //     createdAt: new Date().toLocaleString()
+    //   }
+    //   const result = await trackingsCollection.insertOne(log);
+    //   return result;
+    // }
 
     // user related api
 
@@ -173,15 +241,12 @@ async function run() {
 
       if (workStatus) {
         if (workStatus === "setup_completed") {
-          // Case 1: Specifically asking for completed items (Earning page)
           query.decorationStatus = "setup_completed";
         } else if (workStatus === "materials_prepared") {
-          // Case 2: specifically asking for pending (Assigned Projects page)
-          // You might want to include "on_the_way" here too if needed
-          // query.decorationStatus = {$in: ["materials_prepared", "on_the_way_to_venue"]};
-          query.decorationStatus = { $nin: ["setup_completed"] }; // Your existing logic for "active" tasks
+       
+          query.decorationStatus = { $nin: ["setup_completed"] }; 
         } else {
-          // Generic case
+          
           query.decorationStatus = workStatus;
         }
       }
@@ -235,6 +300,9 @@ async function run() {
         decoratorUpdatedDoc
       );
 
+      // log tracking
+      // logTracking(trackingId, "materials_prepared" )
+
       res.send(decoratorResult);
     });
 
@@ -262,6 +330,8 @@ async function run() {
       }
 
       const result = await decorationsCollection.updateOne(query, updatedDoc);
+      // log tracking
+      // logTracking(trackingId, decorationStatus)
       res.send(result);
     });
 
@@ -385,6 +455,8 @@ async function run() {
           };
 
           const resultPayment = await paymentsCollection.insertOne(payment);
+
+          // logTracking(trackingId, 'assigned_decorator')
 
           return res.send({
             success: true,
