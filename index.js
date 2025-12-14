@@ -9,7 +9,9 @@ const crypto = require("crypto");
 
 const admin = require("firebase-admin");
 
-const serviceAccount = require("./home-decoration-firebase-adminsdk.json");
+
+const decoded = Buffer.from(process.env.FB_SERVICE_KEY, 'base64').toString('utf8')
+const serviceAccount = JSON.parse(decoded);
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
@@ -68,7 +70,7 @@ async function run() {
     const decorationsCollection = db.collection("decorations");
     const paymentsCollection = db.collection("payments");
     const decoratorsCollection = db.collection("decorators");
-    // const trackingsCollection = db.collection("trackings");
+    const bookingsCollection = db.collection("bookings");
 
     
 
@@ -80,7 +82,7 @@ async function run() {
       const query = { email };
       const user = await usersCollection.findOne(query);
 
-      if (!user || user.role !== "admin") {
+      if (!user || user?.role !== "admin") {
         return res.status(403).send({ message: "forbidden access" });
       }
 
@@ -142,6 +144,13 @@ async function run() {
       }
     });
 
+    app.post("/bookings", async (req, res) => {
+    const booking = req.body;
+    const result = await bookingsCollection.insertOne(booking); // Ensure you define bookingsCollection
+    res.send(result);
+});
+
+
     // const logTracking = async(trackingId, status) => {
     //   const log = {
     //     trackingId,
@@ -161,7 +170,6 @@ async function run() {
       res.send(result);
     });
 
-    app.get("/users/:id", async (req, res) => {});
 
     app.get("/users/:email/role", async (req, res) => {
       const email = req.params.email;
@@ -229,16 +237,6 @@ async function run() {
         query.decoratorEmail = decoratorEmail;
       }
 
-      // if (workStatus !== "setup_completed") {
-      //   // query.workStatus = workStatus;workStatus
-      //   // query.decorationStatus = {$in: ["materials_prepared", "on_the_way_to_venue"]};
-      //   query.decorationStatus = { $nin: ["setup_completed"] };
-      // }
-      // else{
-      //   // query.decorationStatus = decorationStatus;
-      //   query.decorationStatus = workStatus;
-      // }
-
       if (workStatus) {
         if (workStatus === "setup_completed") {
           query.decorationStatus = "setup_completed";
@@ -263,7 +261,7 @@ async function run() {
       res.send(result);
     });
 
-    app.post("/decorations", async (req, res) => {
+    app.post("/decorations", verifyFBToken, verifyAdmin, async (req, res) => {
       const decoration = req.body;
 
       // Decoration Created time
@@ -374,38 +372,6 @@ async function run() {
       res.send({ url: session.url });
     });
 
-    // old
-    // app.post("/create-checkout-session", async (req, res) => {
-    //   const paymentInfo = req.body;
-    //   const amount = parseInt(paymentInfo.cost) * 100;
-
-    //   const session = await stripe.checkout.sessions.create({
-    //     line_items: [
-    //       {
-    //         // Provide the exact Price ID (for example, price_1234) of the product you want to sell
-    //         price_data: {
-    //           currency: "BDT",
-    //           unit_amount: amount,
-    //           product_data: {
-    //             name: paymentInfo.serviceName,
-    //           },
-    //         },
-
-    //         quantity: 1,
-    //       },
-    //     ],
-    //     customer_email: paymentInfo.adminEmail,
-    //     mode: "payment",
-    //     metadata: {
-    //       decorationId: paymentInfo.decorationId,
-    //       decorationName: paymentInfo.serviceName,
-    //     },
-    //     success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success`,
-    //     cancel_url: `${process.env.SITE_DOMAIN}/dashboard/payment-cancelled`,
-    //   });
-    //   console.log(session);
-    //   res.send({ url: session.url });
-    // });
 
     app.patch("/payment-success", async (req, res) => {
       try {
@@ -489,28 +455,100 @@ async function run() {
           return res.status(403).send({ message: "forbidden access" });
         }
       }
-      const cursor = paymentsCollection.find(query).sort({ paidAt: -1 });
-      const result = await cursor.toArray();
-      res.send(result);
+      // const cursor = paymentsCollection.find(query).sort({ paidAt: -1 });
+      // const result = await cursor.toArray();
+      // res.send(result);
+      try {
+        const result = await paymentsCollection.aggregate([
+          { $match: query },
+          { $sort: { paidAt: -1 } },
+          // Join with decorations to get the status
+          {
+            $lookup: {
+              from: "decorations",
+              let: { decorationIdObj: { $toObjectId: "$decorationId" } }, // Convert string ID to ObjectId
+              pipeline: [
+                { $match: { $expr: { $eq: ["$_id", "$$decorationIdObj"] } } }
+              ],
+              as: "decorationInfo"
+            }
+          },
+          {
+             $unwind: { path: "$decorationInfo", preserveNullAndEmptyArrays: true }
+          },
+          {
+            $addFields: {
+              workStatus: "$decorationInfo.decorationStatus" // Get the status
+            }
+          },
+          {
+            $project: {
+              decorationInfo: 0 // Clean up
+            }
+          }
+        ]).toArray();
+        
+        res.send(result);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Error fetching payments" });
+      }
     });
 
     // decorator related apis
-    app.get("/decorators", async (req, res) => {
-      const { status, workStatus } = req.query;
-      const query = {};
 
+    app.get("/decorators", verifyFBToken, async (req, res) => {
+      const { status, workStatus } = req.query;
+      
+      const query = {};
       if (status) {
         query.status = status;
       }
-
       if (workStatus) {
         query.workStatus = workStatus;
       }
 
-      const cursor = decoratorsCollection.find(query);
-      const result = await cursor.toArray();
-      res.send(result);
+      try {
+        const result = await decoratorsCollection.aggregate([
+          { $match: query },
+          {
+            $lookup: {
+              from: "users",             
+              localField: "decoratorEmail",
+              foreignField: "email",     
+              as: "userDetails"          
+            }
+          },
+
+          
+          {
+            $unwind: {
+              path: "$userDetails",
+              preserveNullAndEmptyArrays: true 
+            }
+          },
+
+          {
+            $addFields: {
+              decoratorImage: "$userDetails.photoURL" 
+            }
+          },
+
+          {
+            $project: {
+              userDetails: 0 
+            }
+          }
+        ]).toArray();
+
+        res.send(result);
+
+      } catch (error) {
+        console.error("Error fetching decorators:", error);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
     });
+
 
     app.post("/decorators", async (req, res) => {
       const decorator = req.body;
@@ -560,7 +598,7 @@ async function run() {
       }
     );
 
-    app.delete("/decorators/:id", verifyFBToken, async (req, res) => {
+    app.delete("/decorators/:id", async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
 
@@ -569,10 +607,10 @@ async function run() {
     });
 
     // Send a ping to confirm a successful connection
-    await client.db("admin").command({ ping: 1 });
-    console.log(
-      "Pinged your deployment. You successfully connected to MongoDB!"
-    );
+    // await client.db("admin").command({ ping: 1 });
+    // console.log(
+    //   "Pinged your deployment. You successfully connected to MongoDB!"
+    // );
   } finally {
     // Ensures that the client will close when you finish/error
     // await client.close();

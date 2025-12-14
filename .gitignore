@@ -1,3 +1,4 @@
 node_modules
 .env
 home-decoration-firebase-adminsdk.json
+.vercel
