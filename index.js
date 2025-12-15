@@ -9,8 +9,9 @@ const crypto = require("crypto");
 
 const admin = require("firebase-admin");
 
-
-const decoded = Buffer.from(process.env.FB_SERVICE_KEY, 'base64').toString('utf8')
+const decoded = Buffer.from(process.env.FB_SERVICE_KEY, "base64").toString(
+  "utf8"
+);
 const serviceAccount = JSON.parse(decoded);
 
 admin.initializeApp({
@@ -63,7 +64,7 @@ const client = new MongoClient(uri, {
 async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
-    await client.connect();
+    // await client.connect();
 
     const db = client.db("home_decor_db");
     const usersCollection = db.collection("users");
@@ -71,8 +72,6 @@ async function run() {
     const paymentsCollection = db.collection("payments");
     const decoratorsCollection = db.collection("decorators");
     const bookingsCollection = db.collection("bookings");
-
-    
 
     // middleware verify admin before allowing admin activity
     // must be used after verifyFBToken middleware
@@ -107,9 +106,9 @@ async function run() {
           .aggregate([
             {
               $group: {
-                _id: "$serviceName", 
-                count: { $sum: 1 }, 
-                totalRevenue: { $sum: { $toInt: "$cost" } }, 
+                _id: "$serviceName",
+                count: { $sum: 1 },
+                totalRevenue: { $sum: { $toInt: "$cost" } },
               },
             },
             {
@@ -123,7 +122,6 @@ async function run() {
           ])
           .toArray();
 
-       
         const totalRevenue = serviceStats.reduce(
           (sum, item) => sum + item.revenue,
           0
@@ -145,11 +143,10 @@ async function run() {
     });
 
     app.post("/bookings", async (req, res) => {
-    const booking = req.body;
-    const result = await bookingsCollection.insertOne(booking); // Ensure you define bookingsCollection
-    res.send(result);
-});
-
+      const booking = req.body;
+      const result = await bookingsCollection.insertOne(booking); // Ensure you define bookingsCollection
+      res.send(result);
+    });
 
     // const logTracking = async(trackingId, status) => {
     //   const log = {
@@ -170,7 +167,7 @@ async function run() {
       res.send(result);
     });
 
-
+    
     app.get("/users/:email/role", async (req, res) => {
       const email = req.params.email;
       const query = { email };
@@ -241,10 +238,8 @@ async function run() {
         if (workStatus === "setup_completed") {
           query.decorationStatus = "setup_completed";
         } else if (workStatus === "materials_prepared") {
-       
-          query.decorationStatus = { $nin: ["setup_completed"] }; 
+          query.decorationStatus = { $nin: ["setup_completed"] };
         } else {
-          
           query.decorationStatus = workStatus;
         }
       }
@@ -372,7 +367,6 @@ async function run() {
       res.send({ url: session.url });
     });
 
-
     app.patch("/payment-success", async (req, res) => {
       try {
         const sessionId = req.query.session_id;
@@ -459,35 +453,40 @@ async function run() {
       // const result = await cursor.toArray();
       // res.send(result);
       try {
-        const result = await paymentsCollection.aggregate([
-          { $match: query },
-          { $sort: { paidAt: -1 } },
-          // Join with decorations to get the status
-          {
-            $lookup: {
-              from: "decorations",
-              let: { decorationIdObj: { $toObjectId: "$decorationId" } }, // Convert string ID to ObjectId
-              pipeline: [
-                { $match: { $expr: { $eq: ["$_id", "$$decorationIdObj"] } } }
-              ],
-              as: "decorationInfo"
-            }
-          },
-          {
-             $unwind: { path: "$decorationInfo", preserveNullAndEmptyArrays: true }
-          },
-          {
-            $addFields: {
-              workStatus: "$decorationInfo.decorationStatus" // Get the status
-            }
-          },
-          {
-            $project: {
-              decorationInfo: 0 // Clean up
-            }
-          }
-        ]).toArray();
-        
+        const result = await paymentsCollection
+          .aggregate([
+            { $match: query },
+            { $sort: { paidAt: -1 } },
+            // Join with decorations to get the status
+            {
+              $lookup: {
+                from: "decorations",
+                let: { decorationIdObj: { $toObjectId: "$decorationId" } }, // Convert string ID to ObjectId
+                pipeline: [
+                  { $match: { $expr: { $eq: ["$_id", "$$decorationIdObj"] } } },
+                ],
+                as: "decorationInfo",
+              },
+            },
+            {
+              $unwind: {
+                path: "$decorationInfo",
+                preserveNullAndEmptyArrays: true,
+              },
+            },
+            {
+              $addFields: {
+                workStatus: "$decorationInfo.decorationStatus", // Get the status
+              },
+            },
+            {
+              $project: {
+                decorationInfo: 0, // Clean up
+              },
+            },
+          ])
+          .toArray();
+
         res.send(result);
       } catch (error) {
         console.error(error);
@@ -497,9 +496,9 @@ async function run() {
 
     // decorator related apis
 
-    app.get("/decorators", verifyFBToken, async (req, res) => {
+    app.get("/decorators", async (req, res) => {
       const { status, workStatus } = req.query;
-      
+
       const query = {};
       if (status) {
         query.status = status;
@@ -509,46 +508,45 @@ async function run() {
       }
 
       try {
-        const result = await decoratorsCollection.aggregate([
-          { $match: query },
-          {
-            $lookup: {
-              from: "users",             
-              localField: "decoratorEmail",
-              foreignField: "email",     
-              as: "userDetails"          
-            }
-          },
+        const result = await decoratorsCollection
+          .aggregate([
+            { $match: query },
+            {
+              $lookup: {
+                from: "users",
+                localField: "decoratorEmail",
+                foreignField: "email",
+                as: "userDetails",
+              },
+            },
 
-          
-          {
-            $unwind: {
-              path: "$userDetails",
-              preserveNullAndEmptyArrays: true 
-            }
-          },
+            {
+              $unwind: {
+                path: "$userDetails",
+                preserveNullAndEmptyArrays: true,
+              },
+            },
 
-          {
-            $addFields: {
-              decoratorImage: "$userDetails.photoURL" 
-            }
-          },
+            {
+              $addFields: {
+                decoratorImage: "$userDetails.photoURL",
+              },
+            },
 
-          {
-            $project: {
-              userDetails: 0 
-            }
-          }
-        ]).toArray();
+            {
+              $project: {
+                userDetails: 0,
+              },
+            },
+          ])
+          .toArray();
 
         res.send(result);
-
       } catch (error) {
         console.error("Error fetching decorators:", error);
         res.status(500).send({ message: "Internal Server Error" });
       }
     });
-
 
     app.post("/decorators", async (req, res) => {
       const decorator = req.body;
